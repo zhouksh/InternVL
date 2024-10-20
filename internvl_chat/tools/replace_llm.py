@@ -1,3 +1,4 @@
+# 将InternVL模型中的language_model进行替换, 之后重新保存checkpoint
 import argparse
 
 import torch

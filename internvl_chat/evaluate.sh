@@ -1,3 +1,6 @@
+# 对各类数据集进行评估, 包括mme, caption, vqa等, 支持单机多节点
+# usage: bash evaluate.sh <checkpoint> <dataset> ...
+
 set -x
 
 CHECKPOINT=${1}
@@ -11,6 +14,7 @@ PORT=${PORT:-63665}
 GPUS=${GPUS:-8}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 NODES=$((GPUS / GPUS_PER_NODE))
+
 export MASTER_PORT=${MASTER_PORT}
 export PORT=${PORT}
 
