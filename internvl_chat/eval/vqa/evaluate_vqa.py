@@ -1,3 +1,6 @@
+'''
+对各类vqa benchmark进行评测
+'''
 import argparse
 import itertools
 import json
@@ -15,6 +18,7 @@ from PIL import Image
 from textvqa_eval import TextVQAAccuracyEvaluator
 from tqdm import tqdm
 
+# 各类vaa数据集的配置, 包括训练, 测试文件, 评估尺度, 最大生成长度等
 ds_collections = {
     'vqav2_val': {
         'train': 'data/vqav2/vqav2_train.jsonl',
@@ -228,6 +232,8 @@ class VQADataset(torch.utils.data.Dataset):
         self.input_size = input_size
         self.dynamic_image_size = dynamic_image_size
         self.use_thumbnail = use_thumbnail
+
+        # few-shot 参数在此没有特殊功能, 可忽略
         self.few_shot = few_shot
         self.max_num = max_num
         if few_shot > 0:
@@ -251,6 +257,7 @@ class VQADataset(torch.utils.data.Dataset):
                     sample['image'],
                     sample['question']) + f" {sample['answer']}"
 
+        # 图像统一转rgb模式后, 进行动态预处理(可选), 拆分成最多max_num个图片
         image = Image.open(image).convert('RGB')
         if self.dynamic_image_size:
             images = dynamic_preprocess(image, image_size=self.input_size,
@@ -258,10 +265,15 @@ class VQADataset(torch.utils.data.Dataset):
                                         max_num=self.max_num)
         else:
             images = [image]
+
+        # 执行图像增广(train模式)或者其他预处理
         pixel_values = [self.transform(image) for image in images]
         pixel_values = torch.stack(pixel_values)
+
+        # vqa的输入prompt形式, 采用原始问题, 再加各数据集的特定指令
         if len(self.prompt) != 0:
             question = question + ' ' + self.prompt
+
         return {
             'question_id': question_id,
             'question': question,
@@ -271,6 +283,9 @@ class VQADataset(torch.utils.data.Dataset):
 
 
 class InferenceSampler(torch.utils.data.sampler.Sampler):
+    '''
+    定义每个进程所处理的采样器, 采样器亦即样本下标的生成器
+    '''
 
     def __init__(self, size):
         self._size = int(size)
@@ -316,9 +331,9 @@ def post_process(response):
 
 
 def evaluate_chat_model():
+    # 对应不同的vqa数据集, 使用的prompt有所不同
     base_prompt = 'Answer the question using a single word or phrase.'
     vizwiz_prompt = "When the provided information is insufficient, respond with 'Unanswerable'. "
-    # infovqa_prompt = 'Answer the question directly.'
     infovqa_prompt = 'Answer the question using a single word or phrase.'
     ai2d_prompt = ''
     random.seed(args.seed)
@@ -511,8 +526,11 @@ if __name__ == '__main__':
     if not os.path.exists(args.out_dir):
         os.makedirs(args.out_dir)
 
+    # 脚本支持对多个vqa数据集同时进行评测
     args.datasets = args.datasets.split(',')
     print('datasets:', args.datasets)
+
+    # 脚本只支持batch_size为1的评测, 但是支持多进程/多gpu
     assert args.batch_size == 1, 'Only batch size 1 is supported'
 
     torch.distributed.init_process_group(
@@ -523,6 +541,7 @@ if __name__ == '__main__':
 
     torch.cuda.set_device(int(os.getenv('LOCAL_RANK', 0)))
 
+    # 加载模型与切词器后, 打印基本配置信息, 包括模型参数量, 图像大小, 模板, 是否使用动态图像分辨率, 是否使用缩略图等
     model, tokenizer = load_model_and_tokenizer(args)
     image_size = model.config.force_image_size or model.config.vision_config.image_size
     use_thumbnail = model.config.use_thumbnail
@@ -538,4 +557,5 @@ if __name__ == '__main__':
     print(f'[test] dynamic_image_size: {args.dynamic}')
     print(f'[test] use_thumbnail: {use_thumbnail}')
 
+    # 开始评测, 函数中将使用在此定义的全局变量
     evaluate_chat_model()
