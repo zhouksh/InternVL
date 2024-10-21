@@ -64,6 +64,9 @@ NORM2FN = {
 
 
 class InternVisionEmbeddings(nn.Module):
+    """ Embedding采用卷积的方式实现, 除了按照patch_size切分得到多个时刻的vision-embedding, 还增加一个时刻用于class_embed,
+    得到的输出shape为(N, num_patches+1, embed_dim).
+    """
     def __init__(self, config: InternVisionConfig):
         super().__init__()
         self.config = config
@@ -80,6 +83,7 @@ class InternVisionEmbeddings(nn.Module):
         )
 
         self.num_patches = (self.image_size // self.patch_size) ** 2
+        # 额外一个position给class_embedding
         self.num_positions = self.num_patches + 1
 
         self.position_embedding = nn.Parameter(torch.randn(1, self.num_positions, self.embed_dim))
@@ -96,9 +100,9 @@ class InternVisionEmbeddings(nn.Module):
         target_dtype = self.patch_embedding.weight.dtype
         patch_embeds = self.patch_embedding(pixel_values)  # shape = [*, channel, width, height]
         batch_size, _, height, width = patch_embeds.shape
-        patch_embeds = patch_embeds.flatten(2).transpose(1, 2)
+        patch_embeds = patch_embeds.flatten(2).transpose(1, 2) # shape = [*, self.num_patches, self.embed_dim]
         class_embeds = self.class_embedding.expand(batch_size, 1, -1).to(target_dtype)
-        embeddings = torch.cat([class_embeds, patch_embeds], dim=1)
+        embeddings = torch.cat([class_embeds, patch_embeds], dim=1) # shape = [*, self.num_patches+1, self.embed_dim]
         position_embedding = torch.cat([
             self.position_embedding[:, :1, :],
             self._get_pos_embed(self.position_embedding[:, 1:, :], height, width)
@@ -108,7 +112,9 @@ class InternVisionEmbeddings(nn.Module):
 
 
 class InternAttention(nn.Module):
-    """Multi-headed attention from 'Attention Is All You Need' paper"""
+    """Multi-headed attention from 'Attention Is All You Need' paper
+    提供naive_attn以及flash_attn两种实现, flash_attn提供更高效的计算 
+    """
 
     def __init__(self, config: InternVisionConfig):
         super().__init__()
@@ -182,6 +188,7 @@ class InternAttention(nn.Module):
 
 
 class InternMLP(nn.Module):
+    ''' 两层fc结构, 不包含layer_norm操作 '''
     def __init__(self, config: InternVisionConfig):
         super().__init__()
         self.config = config
@@ -295,6 +302,7 @@ class InternVisionEncoder(nn.Module):
 
 
 class InternVisionModel(PreTrainedModel):
+    """vision model由embedding与encoder两部分组成"""
     main_input_name = 'pixel_values'
     config_class = InternVisionConfig
     _no_split_modules = ['InternVisionEncoderLayer']
@@ -307,6 +315,7 @@ class InternVisionModel(PreTrainedModel):
         self.encoder = InternVisionEncoder(config)
 
     def resize_pos_embeddings(self, old_size, new_size, patch_size):
+        """TODO: what for?"""
         pos_emb = self.embeddings.position_embedding
         _, num_positions, embed_dim = pos_emb.shape
         cls_emb = pos_emb[:, :1, :]
@@ -328,6 +337,8 @@ class InternVisionModel(PreTrainedModel):
             return_dict: Optional[bool] = None,
             pixel_embeds: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple, BaseModelOutputWithPooling]:
+        ''' 支持pixel_values像素输入, 或者pixel_embeds输入
+        '''
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
@@ -349,6 +360,8 @@ class InternVisionModel(PreTrainedModel):
             return_dict=return_dict,
         )
         last_hidden_state = encoder_outputs.last_hidden_state
+
+        # 所谓pooled_output即class_embedding对应的hidden_state
         pooled_output = last_hidden_state[:, 0, :]
 
         if not return_dict:

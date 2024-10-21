@@ -674,6 +674,7 @@ def main():
     tcs_loader = TCSLoader('~/petreloss.conf') if has_tcs_loader else None
 
     if model_args.model_name_or_path is not None:
+        # 直接从internvl checkpoint初始化模型, 命令行参数将覆盖config
         logger.info('Loading InternVLChatModel...')
         config = InternVLChatConfig.from_pretrained(model_args.model_name_or_path)
         config.vision_config.drop_path_rate = model_args.drop_path_rate
@@ -693,11 +694,13 @@ def main():
         model = InternVLChatModel.from_pretrained(
             model_args.model_name_or_path, torch_dtype=torch.bfloat16, config=config)
     else:
+        # 从vit + llm checkpoint初始化模型
         logger.info('Loading ViT-6B...')
         vision_config = InternVisionConfig.from_pretrained(model_args.vision_path)
         vision_config.drop_path_rate = model_args.drop_path_rate
         vision_model = InternVisionModel.from_pretrained(
             model_args.vision_path, torch_dtype=torch.bfloat16, config=vision_config)
+
         logger.info('Loading LLaMA...')
         llm_config = AutoConfig.from_pretrained(model_args.llm_path, trust_remote_code=True)
         if llm_config.model_type == 'internlm2':
@@ -711,6 +714,7 @@ def main():
         llm = model_type.from_pretrained(
             model_args.llm_path, torch_dtype=torch.bfloat16,
             config=llm_config, trust_remote_code=True)
+
         logger.info('Building InternVLChatConfig...')
         internvl_chat_config = InternVLChatConfig(
             vision_config.to_dict(), llm_config.to_dict(), downsample_ratio=data_args.down_sample_ratio,
@@ -719,6 +723,7 @@ def main():
             use_thumbnail=data_args.use_thumbnail, ps_version=model_args.ps_version,
             min_dynamic_patch=data_args.min_dynamic_patch, max_dynamic_patch=data_args.max_dynamic_patch)
         internvl_chat_config.force_image_size = data_args.force_image_size
+
         logger.info('Building InternVLChatModel...')
         model = InternVLChatModel(internvl_chat_config, vision_model, llm)
     model.img_context_token_id = img_context_token_id
@@ -824,6 +829,7 @@ def main():
 
     # Training
     if training_args.do_train:
+        # 热启动可以直接使用resume_from_checkpoint指定，或者自动检测output_dir中的last_checkpoint作为热启动模型
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
