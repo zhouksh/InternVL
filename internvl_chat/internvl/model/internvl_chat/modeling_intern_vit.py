@@ -217,6 +217,8 @@ class InternVisionEncoderLayer(nn.Module):
 
         self.ls1 = nn.Parameter(config.initializer_factor * torch.ones(self.embed_dim))
         self.ls2 = nn.Parameter(config.initializer_factor * torch.ones(self.embed_dim))
+
+        # stochastic depth, refer to https://arxiv.org/pdf/1603.09382
         self.drop_path1 = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
         self.drop_path2 = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
 
@@ -237,6 +239,8 @@ class InternVisionEncoderLayer(nn.Module):
 
 class InternVisionEncoder(nn.Module):
     """
+    组合多个InternVisionEncoderLayer, 默认开启gradient-checkpointing
+
     Transformer encoder consisting of `config.num_hidden_layers` self attention layers. Each layer is a
     [`InternEncoderLayer`].
 
@@ -281,6 +285,8 @@ class InternVisionEncoder(nn.Module):
         for idx, encoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 encoder_states = encoder_states + (hidden_states,)
+
+            # gradient-checkpointing, refer to https://arxiv.org/abs/1604.06174
             if self.gradient_checkpointing and self.training:
                 layer_outputs = torch.utils.checkpoint.checkpoint(
                     encoder_layer,
