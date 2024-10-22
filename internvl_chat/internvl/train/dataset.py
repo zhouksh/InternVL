@@ -683,6 +683,9 @@ def preprocess_internlm(
 
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+    """遍历所有可能的target_ratio, 对比原始图片的宽高比跟目标宽高比的diff, 选择绝对diff最小的target_ratio
+    若最佳ratio_diff相同, 则选择面积更大的宽高比 
+    """
     best_ratio_diff = float('inf')
     best_ratio = (1, 1)
     area = width * height
@@ -700,6 +703,7 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_
 
 
 def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnail=False):
+    """动态分辨率预处理: 根据最少与最多patch数量的设置, 计算所有可能的宽高比, 根据最接近的宽高比缩放原始图片并切割得到多个block"""
     orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
 

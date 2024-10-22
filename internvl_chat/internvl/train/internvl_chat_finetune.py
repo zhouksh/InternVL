@@ -312,6 +312,7 @@ class LazySupervisedDataset(Dataset):
         return preprocess_function
 
     def load_image(self, image_path):
+        """两种载入图片的方式, tcs或者PIL"""
         # Load the image using tcs_loader if available, otherwise use PIL
         if self.tcs_loader is not None and 's3://' in image_path:
             return self.tcs_loader(image_path)
@@ -331,6 +332,7 @@ class LazySupervisedDataset(Dataset):
         return transform
 
     def multi_modal_get_item(self, data_item):
+        """单张图片的get_item"""
         # Build transformation function
         transform = self.get_transform()
 
@@ -378,6 +380,7 @@ class LazySupervisedDataset(Dataset):
         return ret
 
     def multi_modal_multi_image_get_item(self, data_item):
+        """多张图片的get_item"""
         # Build transformation function
         transform = self.get_transform()
 
@@ -421,6 +424,7 @@ class LazySupervisedDataset(Dataset):
         return ret
 
     def video_get_item(self, data_item):
+        """视频的get_item"""
         # Build transformation function
         transform = self.get_transform()
 
@@ -472,6 +476,7 @@ class LazySupervisedDataset(Dataset):
         return ret
 
     def pure_text_get_item(self, data_item):
+        """纯文本的get_item"""
         # Build transformation function
         transform = self.get_transform()
 
@@ -557,6 +562,7 @@ def build_datasets(
     max_dynamic_patch=12,
     normalize_type='imagenet',
 ):
+    """参考shell/data目录下的json文件, 编写各训练数据集的元信息, 最终按照权重或直接拼接各个数据集得到训练数据集"""
     datasets = []
     lengths = []
     ds_collections = json.loads(open(data_args.meta_path).read())
