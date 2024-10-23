@@ -59,7 +59,10 @@ class Conversation:
     stop_token_ids: List[int] = None
 
     def get_prompt(self) -> str:
-        """Get the prompt for generation."""
+        """Get the prompt for generation.
+        构建prompt, 根据不同的sep_style, 利用system_message以及messages构建prompt
+        不同的sep_style对应不同的LLM
+        """
         system_prompt = self.system_template.format(system_message=self.system_message)
         if self.sep_style == SeparatorStyle.ADD_COLON_SINGLE:
             ret = system_prompt + self.sep
@@ -404,3 +407,7 @@ register_conv_template(
         ]
     )
 )
+
+template = get_conv_template("phi3-chat")
+template.append_message('<|user|>\n', '给我讲个笑话吧.')
+print(template.get_prompt())
