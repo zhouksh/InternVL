@@ -124,6 +124,7 @@ class ModelArguments:
         default=False,
         metadata={'help': "Set to True to unfreeze the language model's head."},
     )
+    # 调整trainer使用的优化器
     use_custom_trainer: bool = field(
         default=False,
         metadata={'help': 'Set to True to enable the use of a custom trainer.'},
@@ -132,14 +133,20 @@ class ModelArguments:
         default=False,
         metadata={'help': 'Set to True to use gradient checkpointing.'},
     )
+    # TODO: drop path ? 
     drop_path_rate: float = field(
         default=0.0,
         metadata={'help': 'Set the drop path rate for the ViT model. Default is 0.'},
     )
+    # TODO: pixel shuffle ?
     ps_version: str = field(
         default='v2',
         metadata={'help': 'Specify the version of pixel shuffle implementation. Default is `v1`.'
                           'Please use `v2` to fix the bug of transposed image.'}
+    )
+    attn_implementation: str = field(
+        default='eager',
+        metadata={'help': 'attention_implementation, default is eager, you can choose from [eager, sdpa, flash_attention_2]'}
     )
 
 
@@ -157,6 +164,7 @@ class DataTrainingArguments:
             )
         },
     )
+    # patch的大小
     force_image_size: Optional[int] = field(
         default=448,
         metadata={'help': 'Set the desired size for the image. Default is 224.'},
@@ -169,9 +177,11 @@ class DataTrainingArguments:
         default=False,
         metadata={'help': 'Pad the image to a square shape if set to True.'},
     )
+    # 对话模版, 查看internvl/conversation.py
     conv_style: Optional[str] = field(
         default='internlm2-chat', metadata={'help': 'Prompt style for a conversation.'}
     )
+    # 一个meta json对应着一个dataset collection, 也就是一个训练任务
     meta_path: Optional[str] = field(
         default=None,
         metadata={'help': 'The path of the meta file of datasets.'},
@@ -610,17 +620,16 @@ def main():
     # Parse input arguments
     # See all possible arguments in src/transformers/training_args.py
     # If use DeepSpeed zero3, init_dist must before HfArgumentParser
+
+    # HfArgumentParser包含进程相关参数, 因而需要先进行分布式初始化
     launcher = os.environ.get('LAUNCHER', 'slurm')
     init_dist(launcher=launcher, backend='nccl')
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith('.json'):
-        # If we pass only one argument to the script, and it's the path to a json file,
-        # let's parse it to get our arguments.
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # Setup logging
     logging.basicConfig(
         format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
         datefmt='%m/%d/%Y %H:%M:%S',
@@ -642,7 +651,7 @@ def main():
         f'Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}'
         + f'distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}'
     )
-    logger.info(f'Training/evaluation parameters {training_args}')
+    logger.info(f'training_args {training_args}')
 
     # Detecting last checkpoint and eventually continue from last checkpoint.
     last_checkpoint = None
@@ -676,16 +685,20 @@ def main():
     tcs_loader = TCSLoader('~/petreloss.conf') if has_tcs_loader else None
 
     if model_args.model_name_or_path is not None:
-        # 直接从internvl checkpoint初始化模型, 命令行参数将覆盖config
+        # 直接从internvl checkpoint初始化模型, 命令行参数优先级高于config
         logger.info('Loading InternVLChatModel...')
         config = InternVLChatConfig.from_pretrained(model_args.model_name_or_path)
         config.vision_config.drop_path_rate = model_args.drop_path_rate
-        if config.llm_config.model_type == 'internlm2':
-            config.llm_config.attn_implementation = 'flash_attention_2'  # for InternLM
-            logger.info('Using flash_attention_2 for InternLM')
-        else:
-            config.llm_config._attn_implementation = 'flash_attention_2'  # for LLaMA
-            logger.info('Using flash_attention_2 for LLaMA')
+
+        #if config.llm_config.model_type == 'internlm2':
+        #    config.llm_config.attn_implementation = 'flash_attention_2'  # for InternLM
+        #    logger.info('Using flash_attention_2 for InternLM')
+        #else:
+        #    config.llm_config._attn_implementation = 'flash_attention_2'  # for LLaMA
+        #    logger.info('Using flash_attention_2 for LLaMA')
+        config.llm_config._attn_implementation = model_args.attn_implementation
+        logger.info(f'using {model_args.attn_implementation} attention implementation')
+
         config.template = data_args.conv_style
         config.select_layer = model_args.vision_select_layer
         config.dynamic_image_size = data_args.dynamic_image_size
@@ -693,10 +706,11 @@ def main():
         config.ps_version = model_args.ps_version
         config.min_dynamic_patch = data_args.min_dynamic_patch
         config.max_dynamic_patch = data_args.max_dynamic_patch
+        dtype = torch.float16 if training_args.fp16 else torch.bfloat16
         model = InternVLChatModel.from_pretrained(
-            model_args.model_name_or_path, torch_dtype=torch.bfloat16, config=config)
+            model_args.model_name_or_path, torch_dtype=dtype, config=config)
     else:
-        # 从vit + llm checkpoint初始化模型
+        # 分别从vit + llm checkpoint初始化模型
         logger.info('Loading ViT-6B...')
         vision_config = InternVisionConfig.from_pretrained(model_args.vision_path)
         vision_config.drop_path_rate = model_args.drop_path_rate
@@ -737,8 +751,9 @@ def main():
         state_dict = torch.load(model_args.mlp_path, map_location='cpu')
         message = model.mlp1.load_state_dict(state_dict)
         logger.info(message)
-    logger.info('Finished')
+    logger.info('Model Loading Finished!')
 
+    # 当调整image_size时, vision model的embedding也需要调整
     patch_size = model.config.vision_config.patch_size
     logger.info(f'model.config.force_image_size: {model.config.force_image_size}')
     logger.info(f'data_args.force_image_size: {data_args.force_image_size}')
@@ -754,6 +769,7 @@ def main():
     model.config.force_image_size = data_args.force_image_size
     model.num_image_token = int((data_args.force_image_size // patch_size) ** 2 * (data_args.down_sample_ratio ** 2))
 
+    # 根据tokenizer新增加的special_token数量, 调整llm的embedding
     if num_new_tokens > 0:
         model.language_model.resize_token_embeddings(len(tokenizer))
         output_embeddings = model.language_model.get_output_embeddings().weight.data
