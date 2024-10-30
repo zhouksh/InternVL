@@ -779,6 +779,7 @@ def main():
         model.config.llm_config.vocab_size = len(tokenizer)
         model.language_model.config.vocab_size = len(tokenizer)
 
+    # vision部分固定使用gradient checkpoint, llm部分受到输入参数控制
     model.language_model.config.use_cache = False
     model.vision_model.gradient_checkpointing = True
     model.vision_model.encoder.gradient_checkpointing = True
@@ -853,6 +854,7 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
+
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload
 

@@ -51,6 +51,7 @@ class InternVLChatModel(PreTrainedModel):
         self.patch_size = patch_size
         self.select_layer = config.select_layer
         self.template = config.template
+        # 一个标准的ViT image(通常为336x336或448x448)经过切片(切片大小14x14)以及降采样后的image token数量
         self.num_image_token = int((image_size // patch_size) ** 2 * (config.downsample_ratio ** 2))
         self.downsample_ratio = config.downsample_ratio
         self.ps_version = config.ps_version
@@ -58,6 +59,8 @@ class InternVLChatModel(PreTrainedModel):
 
         logger.info(f'num_image_token: {self.num_image_token}')
         logger.info(f'ps_version: {self.ps_version}')
+
+        # 视觉模型与语言模型可以直接指定, 或者按照config构建, 其中视觉模型固定为InternVisionModel, 语言模型有四个可选
         if vision_model is not None:
             self.vision_model = vision_model
         else:
@@ -79,6 +82,7 @@ class InternVLChatModel(PreTrainedModel):
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
 
+        # mlp1 为视觉模型与语言模型的连接层
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
             nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio) ** 2, llm_hidden_size),
@@ -216,6 +220,7 @@ class InternVLChatModel(PreTrainedModel):
         )
 
     def pixel_shuffle(self, x, scale_factor=0.5):
+        ''' 通过downscale channel来upscale 宽高(或者反过来), (n, w, h, c) -> (n, w*scale, h*scale, c // (scale**2))'''
         n, w, h, c = x.size()
         # N, W, H, C --> N, W, H * scale, C // scale
         x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
@@ -242,10 +247,13 @@ class InternVLChatModel(PreTrainedModel):
                 pixel_values=pixel_values,
                 output_hidden_states=True,
                 return_dict=True).hidden_states[self.select_layer]
+
+        # 忽略掉cls_token
         vit_embeds = vit_embeds[:, 1:, :]
 
         h = w = int(vit_embeds.shape[1] ** 0.5)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+        # downsample_ratio < 1, 使得vision token长度减少, 宽度增加
         vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         vit_embeds = self.mlp1(vit_embeds)
@@ -314,6 +322,7 @@ class InternVLChatModel(PreTrainedModel):
         img_context_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
         self.img_context_token_id = img_context_token_id
 
+        # 根据template, history以及question, 组装prompt(即query)
         template = get_conv_template(self.template)
         template.system_message = self.system_message
         eos_token_id = tokenizer.convert_tokens_to_ids(template.sep)
@@ -326,6 +335,7 @@ class InternVLChatModel(PreTrainedModel):
         template.append_message(template.roles[1], None)
         query = template.get_prompt()
 
+        # query中可以包含k个图像, 对应有k个<image>需要替换成image special token序列
         if verbose and pixel_values is not None:
             image_bs = pixel_values.shape[0]
             print(f'dynamic ViT batch size: {image_bs}')
@@ -368,6 +378,7 @@ class InternVLChatModel(PreTrainedModel):
             return_dict: Optional[bool] = None,
             **generate_kwargs,
     ) -> torch.LongTensor:
+        ''' 当pixel_values非空时, 则是VLM式的生成, 反之则为LLM式的生成 '''
 
         assert self.img_context_token_id is not None
         if pixel_values is not None:
@@ -379,6 +390,7 @@ class InternVLChatModel(PreTrainedModel):
             B, N, C = input_embeds.shape
             input_embeds = input_embeds.reshape(B * N, C)
 
+            # 将所有<IMG_CONTEXT_TOKEN>位置上对应的embedding替换为vit_embeds
             input_ids = input_ids.reshape(B * N)
             selected = (input_ids == self.img_context_token_id)
             assert selected.sum() != 0
